@@ -1,344 +1,195 @@
 from manim import *
-import itertools as it
-import operator as op
+from MatNgocXit import mat_ngoc_points
+from Phoi import phoi_points
+from Lan1 import lan1_points
+from Lan2 import lan2_points
+from Lan3 import lan3_points
+from Lan4 import lan4_points
+from Lan5 import lan5_points
 import numpy as np
-from functools import reduce
-# import scipy
 
-FRAME_WIDTH = 1920  # Example width
-FRAME_HEIGHT = 1080  # Example height
-
-class FourierCirclesScene(Scene):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.n_vectors = 1000
-        self.big_radius = 2
-        self.colors = [BLUE_D, BLUE_C, BLUE_E, GREY_BROWN]
-        self.circle_style = {
-            "stroke_width": 2,
+class FourierSceneAbstract(ZoomedScene):
+    def __init__(self):
+        super().__init__()
+        self.fourier_symbol_config = {
+            "stroke_width": 100, # 100 folds
+            "fill_opacity": 1,
+            "height": 4,
         }
         self.vector_config = {
             "buff": 0,
-            "max_tip_length_to_length_ratio": 0.35,
-            "fill_opacity": 0.75,
+            "max_tip_length_to_length_ratio": 0.25,
+            "tip_length": 0.15,
+            "max_stroke_width_to_length_ratio": 10,
+            "stroke_width": 140 # 100 folds
         }
         self.circle_config = {
-            "stroke_width": 1,
-            "stroke_opacity": 0.75,
+            "stroke_width": 100, # 100 folds
+            "stroke_opacity": 0.3,
+            "color": WHITE
         }
-        self.base_frequency = 1
-        self.slow_factor = 0.25
-        self.center_point = ORIGIN
-        self.parametric_function_step_size = 0.01
-        self.drawn_path_color = YELLOW
-        self.drawn_path_stroke_width = 2
-        # TODO: newly added
-        self.total_time = 0
+        self.n_vectors = 714
+        self.cycle_seconds = 15
+        self.parametric_func_step = 0.001
+        self.drawn_path_stroke_width = 500 #100 folds
+        self.drawn_path_interpolation_config = [0, 1]
+        self.path_n_samples = 1000
+        self.freqs = list(range(-self.n_vectors // 2, self.n_vectors // 2 + 1, 1))
+        self.freqs.sort(key=abs)
 
     def setup(self):
-        self.slow_factor_tracker = ValueTracker(
-            self.slow_factor
-        )
-        self.vector_clock = ValueTracker(0)
-        self.vector_clock.add_updater(
-            lambda m, dt: m.increment_value(
-                self.get_slow_factor() * dt
-            )
-        )
+        super().setup()
+        self.vector_clock = ValueTracker()
+        self.slow_factor_tracker = ValueTracker(0)
         self.add(self.vector_clock)
 
-    def get_slow_factor(self):
-        return self.slow_factor_tracker.get_value()
+    def start_vector_clock(self):  # This updates vector_clock to follow the add_updater parameter dt
+        self.vector_clock.add_updater(
+            lambda t, dt: t.increment_value(dt * min(1.0, 20 * self.slow_factor_tracker.get_value()) / self.cycle_seconds)
+        )
+    def stop_vector_clock(self):
+        self.vector_clock.remove_updater(self.start_vector_clock)
 
-    def get_vector_time(self):
-        return self.vector_clock.get_value()
+    def get_fourier_coefs(self, path):
+        dt = 1 / self.path_n_samples
+        t_range = np.arange(0, 1, dt)
 
-    #
-    def get_freqs(self):
-        n = self.n_vectors
-        all_freqs = list(range(n // 2, -n // 2, -1))
-        all_freqs.sort(key=abs)
-        return all_freqs
+        points = np.array([
+            path.point_from_proportion(t)
+            for t in t_range
+        ])
+        complex_points = points[:, 0] + 1j * points[:, 1]
 
-    def get_coefficients(self):
-        return [complex(0) for _ in range(self.n_vectors)]
+        coefficients = [
+            np.sum(np.array([
+                c_point * np.exp(-TAU * 1j * freq * t) * dt
+                for t, c_point in zip(t_range, complex_points)
+            ]))
+            for freq in self.freqs
+        ]
+        return coefficients
 
-    def get_color_iterator(self):
-        return it.cycle(self.colors)
+    def get_fourier_vectors(self, path):
+        coefficients = self.get_fourier_coefs(path)
 
-    def get_rotating_vectors(self, freqs=None, coefficients=None):
         vectors = VGroup()
-        self.center_tracker = VectorizedPoint(self.center_point)
-
-        if freqs is None:
-            freqs = self.get_freqs()
-        if coefficients is None:
-            coefficients = self.get_coefficients()
-
-        last_vector = None
-        for freq, coefficient in zip(freqs, coefficients):
-            if last_vector is not None:
-                center_func = last_vector.get_end
+        v_is_first_vector = True
+        for coef, freq in zip(coefficients, self.freqs):
+            v = Vector([np.real(coef), np.imag(coef)], **self.vector_config)
+            if v_is_first_vector:
+                center_func = VectorizedPoint(ORIGIN).get_location  # Function to center position at tip of last vector
+                v_is_first_vector = False
             else:
-                center_func = self.center_tracker.get_location
-            vector = self.get_rotating_vector(
-                coefficient=coefficient,
-                freq=freq,
-                center_func=center_func
-            )
-            vectors.add(vector)
-            last_vector = vector
+                center_func = last_v.get_end
+            v.center_func = center_func
+            last_v = v
+            v.freq = freq
+            v.coef = coef
+            v.phase = np.angle(coef)
+            v.shift(v.center_func() - v.get_start())
+            v.set_angle(v.phase)
+            vectors.add(v)
         return vectors
 
-    def get_rotating_vector(self, coefficient, freq, center_func):
-        vector = Vector(RIGHT, **self.vector_config)
-        vector.scale(abs(coefficient))
-        if abs(coefficient) == 0:
-            phase = 0
-        else:
-            phase = np.log(coefficient).imag
-        vector.rotate(phase, about_point=ORIGIN)
-        vector.freq = freq
-        vector.coefficient = coefficient
-        vector.center_func = center_func
-        vector.add_updater(self.update_vector)
-        return vector
-
-    def update_vector(self, vector, dt):
-        time = self.get_vector_time()
-        coef = vector.coefficient
-        freq = vector.freq
-        phase = np.log(coef).imag
-
-        vector.set_length(abs(coef))
-        vector.set_angle(phase + time * freq * TAU)
-        vector.shift(vector.center_func() - vector.get_start())
-        return vector
+    def update_vectors(self, vectors):
+        for v in vectors:
+            time = self.vector_clock.get_value()
+            v.shift(v.center_func() - v.get_start())
+            v.set_angle(
+                v.phase + time * v.freq * TAU)  # NOTE Rotate() did not work here for unknown reason, probably related to how manin handles updaters
 
     def get_circles(self, vectors):
-        return VGroup(*[
-            self.get_circle(
-                vector,
-                color=color
-            )
-            for vector, color in zip(
-                vectors,
-                self.get_color_iterator()
-            )
-        ])
+        circles = VGroup()
+        for v in vectors:
+            c = Circle(radius=v.get_length(), **self.circle_config)
+            c.center_func = v.get_start
+            c.move_to(c.center_func())
+            circles.add(c)
+        return circles
 
-    def get_circle(self, vector, color=BLUE):
-        circle = Circle(color=color, **self.circle_config)
-        circle.center_func = vector.get_start
-        circle.radius_func = vector.get_length
-        circle.add_updater(self.update_circle)
-        return circle
+    def update_circles(self, circles):
+        for c in circles:
+            c.move_to(c.center_func())
 
-    def update_circle(self, circle):
-        circle.set_width(2 * circle.radius_func())
-        circle.move_to(circle.center_func())
-        return circle
+    def get_drawn_path(self, vectors):
 
-    def get_vector_sum_path(self, vectors, color=YELLOW):
-        coefs = [v.coefficient for v in vectors]
-        freqs = [v.freq for v in vectors]
-        center = vectors[0].get_start()
-        path = ParametricFunction(
-            lambda t: center + reduce(op.add, [
-                complex_to_R3(coef * np.exp(TAU * 1j * freq * t))
-                for coef, freq in zip(coefs, freqs)
-            ]),
-            t_range=(0, 1),  # Specify the domain using t_range
-            color=color,
-            dt=self.parametric_function_step_size,
-        )
-        return path
+        def fourier_series_func(t):
+            fss = np.sum(np.array([
+                v.coef * np.exp(TAU * 1j * v.freq * t)
+                for v in vectors
+            ]))
+            real_fss = np.array([np.real(fss), np.imag(fss), 0])
+            return real_fss
 
-    # TODO, this should be a general animated mobect
-    def get_drawn_path_alpha(self):
-        return self.get_vector_time()
+        t_range = np.array([0, 1, self.parametric_func_step])
+        vector_sum_path = ParametricFunction(fourier_series_func, t_range=t_range)
+        broken_path = CurvesAsSubmobjects(vector_sum_path)
+        broken_path.stroke_width = 0
+        broken_path.start_width = self.drawn_path_interpolation_config[0]
+        broken_path.end_width = self.drawn_path_interpolation_config[1]
+        return broken_path
 
-    # TODO: originally fade_rate=0.2
-    def get_drawn_path(self, vectors, stroke_width=None, fade_rate=0.05, **kwargs):
-        if stroke_width is None:
-            stroke_width = self.drawn_path_stroke_width
-        path = self.get_vector_sum_path(vectors, **kwargs)
-        path.set_stroke(self.drawn_path_color, stroke_width)
-        self.add_path_fader(path, fade_rate)
-        return path
+    def update_path(self, broken_path):
+        alpha = self.vector_clock.get_value()
+        n_curves = len(broken_path)
+        alpha_range = np.linspace(0, 1, n_curves)
+        for a, subpath in zip(alpha_range, broken_path):
+            b = (alpha - a)
+            if b < 0:
+                width = 0
+            else:
+                width = self.drawn_path_stroke_width * interpolate(broken_path.start_width, broken_path.end_width,
+                                                                   (1 - (b % 1)))
+            subpath.set_stroke(width=width)
 
-    # TODO: originally fade_rate=0.2
-    # def add_path_fader(self, path,  fade_rate=0.05):
-    #     stroke_width = np.max(path.get_stroke_width())
-    #     stroke_opacity = np.max(path.get_stroke_opacity())
-    #
-    #     def update_path(path_, dt):
-    #         alpha = self.get_vector_time()
-    #         n = path_.get_num_points()
-    #         fade_factors = (np.linspace(0, 1, n) - alpha) % 1
-    #         fade_factors = fade_factors**fade_rate
-    #         path_.set_stroke(
-    #             width=stroke_width * fade_factors,
-    #             opacity=stroke_opacity * fade_factors,
-    #         )
-    #         return path_
-    #
-    #     path.add_updater(update_path)
-    #     return path
-
-    def add_path_fader(self, path, fade_rate=0.05):
-        stroke_width = np.max(path.get_stroke_width())
-        stroke_opacity = np.max(path.get_stroke_opacity())
-
-        def update_path(path_, dt):
-            alpha = self.get_vector_time()
-            n = path_.get_num_points()
-            fade_factors = (np.linspace(0, 1, n) - alpha) % 1
-            fade_factors = fade_factors ** fade_rate
-            # Calculate the desired opacity based on time
-            desired_opacity = stroke_opacity * fade_factors
-            # Smoothly decrease opacity to the desired value
-            current_opacity = path_.get_stroke_opacity()
-            new_opacity = current_opacity + (desired_opacity - current_opacity) * fade_rate
-            path_.set_stroke(
-                width=stroke_width,
-                opacity=new_opacity,
-            )
-            return path_
-
-        path.add_updater(update_path)
-        return path
-
-    def get_y_component_wave(self,
-                             vectors,
-                             left_x=1,
-                             color=PINK,
-                             n_copies=2,
-                             right_shift_rate=5):
-        path = self.get_vector_sum_path(vectors)
-
-        wave = ParametricFunction(
-            lambda t: op.add(
-                right_shift_rate * t * LEFT,
-                path.point_from_proportion(t)[1] * UP  # Use point_from_proportion instead of function
-            ),
-            t_range=(path.t_min, path.t_max),  # Specify the domain using t_range
-            color=color,
-        )
-        wave_copies = VGroup(*[
-            wave.copy()
-            for x in range(n_copies)
-        ])
-        wave_copies.arrange(RIGHT, buff=0)
-        top_point = wave_copies.get_top()
-        wave.creation = Create(
-            wave,
-            run_time=(1 / self.get_slow_factor()),
-            rate_func=linear,
-        )
-        cycle_animation(wave.creation)
-        wave.add_updater(lambda m: m.shift(
-            (m.get_left()[0] - left_x) * LEFT
-        ))
-
-        def update_wave_copies(wcs):
-            # TODO: run_time was originally total_time
-            index = int(
-                wave.creation.run_time * self.get_slow_factor()
-            )
-            wcs[:index].match_style(wave)
-            wcs[index:].set_stroke(width=0)
-            wcs.next_to(wave, RIGHT, buff=0)
-            wcs.align_to(top_point, UP)
-        wave_copies.add_updater(update_wave_copies)
-
-        return VGroup(wave, wave_copies)
-
-    def get_wave_y_line(self, vectors, wave):
-        return DashedLine(
-            vectors[-1].get_end(),
-            wave[0].get_end(),
-            stroke_width=1,
-            dash_length=DEFAULT_DASH_LENGTH * 0.5,
-        )
-
-    # Computing Fourier series
-    # i.e. where all the math happens
-    def get_coefficients_of_path(self, path, n_samples=10000, freqs=None):
-        if freqs is None:
-            freqs = self.get_freqs()
-        dt = 1 / n_samples
-        ts = np.arange(0, 1, dt)
-        samples = np.array([
-            path.point_from_proportion(t)
-            for t in ts
-        ])
-        samples -= self.center_point
-        complex_samples = samples[:, 0] + 1j * samples[:, 1]
-
-        result = []
-        for freq in freqs:
-            riemann_sum = np.array([
-                np.exp(-TAU * 1j * freq * t) * cs
-                for t, cs in zip(ts, complex_samples)
-            ]).sum() * dt
-            result.append(riemann_sum)
-
-        return result
-
-
-class FourierOfPiSymbol(FourierCirclesScene):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+class FourierOfPiSymbol(FourierSceneAbstract):
+    def __init__(self):
+        super().__init__()
         self.n_vectors = 101
         self.center_point = ORIGIN
         self.slow_factor = 0.1
-        self.n_cycles = 1
+        self.n_cycles = 30
         self.tex = "\\pi"
         self.start_drawn = False
         self.max_circle_stroke_width = 1
 
     def construct(self):
-        self.add_vectors_circles_path()
-        for n in range(self.n_cycles):
-            self.run_one_cycle()
+        vectors1 = self.get_fourier_vectors(self.get_path())
+        circles1 = self.get_circles(vectors1)
+        drawn_path1 = self.get_drawn_path(vectors1).set_color(RED)
+        last_vector = vectors1[-1]
 
-    def add_vectors_circles_path(self):
-        path = self.get_path()
-        coefs = self.get_coefficients_of_path(path)
+        def follow_end_vector(camera):
+            camera.move_to(last_vector.get_end())
+        self.wait(1)
+        self.play(
+            *[
+                GrowArrow(arrow)
+                for vector_group in [vectors1]
+                for arrow in vector_group
+            ],
+            *[
+                Create(circle)
+                for circle_group in [circles1]
+                for circle in circle_group
+            ],
+            run_time=3,
+        )
 
-        for freq, coef in zip(self.get_freqs(), coefs):
-            print(freq, "\t", coef)
 
-        vectors = self.get_rotating_vectors(coefficients=coefs)
-        circles = self.get_circles(vectors)
-        self.set_decreasing_stroke_widths(circles)
-        drawn_path = self.get_drawn_path(vectors)
-        if self.start_drawn:
-            self.vector_clock.increment_value(1)
+        self.add(
+            vectors1,
+            circles1,
+            drawn_path1.set_stroke(width = 0),
+        )
+        self.camera.frame.add_updater(follow_end_vector)
+        vectors1.add_updater(self.update_vectors)
+        circles1.add_updater(self.update_circles)
+        drawn_path1.add_updater(self.update_path)
+        self.start_vector_clock()
+        self.play(self.slow_factor_tracker.animate.set_value(1), run_time=1 * self.cycle_seconds)
+        self.wait(1 * self.cycle_seconds)
 
-        self.add(path)
-        self.add(vectors)
-        self.add(circles)
-        self.add(drawn_path)
-
-        self.vectors = vectors
-        self.circles = circles
-        self.path = path
-        self.drawn_path = drawn_path
-
-    def run_one_cycle(self):
-        time = 1 / self.slow_factor
-        self.wait(time)
-
-    def set_decreasing_stroke_widths(self, circles):
-        mcsw = self.max_circle_stroke_width
-        for k, circle in enumerate(circles, start=1):
-            stroke_width = max(mcsw / k, mcsw)
-            if isinstance(stroke_width, np.ndarray):
-                stroke_width = float(stroke_width)
-            circle.set_stroke(width=stroke_width)
-        return circles
 
     def get_path(self):
         tex_mob = MathTex(self.tex)
@@ -348,32 +199,14 @@ class FourierOfPiSymbol(FourierCirclesScene):
         path.set_stroke(WHITE, 1)
         return path
 
-    # TODO: originally fade_rate=0.2
-    def add_path_fader(self, path, fade_rate=0.05):
-        stroke_width = np.max(path.get_stroke_width())
-        stroke_opacity = np.max(path.get_stroke_opacity())
-
-        if isinstance(stroke_width, np.ndarray):
-            stroke_width = float(stroke_width)
-        if isinstance(stroke_opacity, np.ndarray):
-            stroke_opacity = float(stroke_opacity)
-
-        def update_path_fader(mob, dt):
-            new_stroke_opacity = max(0, mob.get_stroke_opacity() - fade_rate * dt)
-            mob.set_stroke(opacity=new_stroke_opacity)
-
-        path.add_updater(update_path_fader)
-        return path
-
-
-class FourierOfTrebleClef(FourierOfPiSymbol):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
+class FaceScene(FourierOfPiSymbol):
+    def __init__(self):
+        super().__init__()
         self.n_vectors = 101
         self.run_time = 30
         self.start_drawn = True
-        self.file_name = "cat"
-        self.height = 7.5
+        self.file_name = "face"
+        self.height = 5
 
     def get_shape(self):
         shape = SVGMobject(self.file_name)
@@ -387,277 +220,758 @@ class FourierOfTrebleClef(FourierOfPiSymbol):
         path.set_stroke(WHITE, 0)
         return path
 
-class ComplexFourierSeriesExample(FourierOfTrebleClef):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-        self.file_name = "svg-image-7"
-        self.run_time = 10
-        self.n_vectors = 200
-        self.n_cycles = 2
-        self.max_circle_stroke_width = 0.75
-        self.drawing_height = 5
-        self.center_point = DOWN
-        self.top_row_center = 3 * UP
-        self.top_row_label_y = 2
-        self.top_row_x_spacing = 1.75
-        self.top_row_copy_scale_factor = 0.9
-        self.start_drawn = False
-        self.plane_config = {
-            "axis_config": {"unit_size": 2},
-            "y_min": -1.25,
-            "y_max": 1.25,
-            "x_min": -2.5,
-            "x_max": 2.5,
-            "background_line_style": {
-                "stroke_width": 1,
-                "stroke_color": GREY_B,
-            },
-        }
-        self.top_rect_height = 2.5
+class CircleSence(FourierOfPiSymbol):
+    def __init__(self):
+        super().__init__()
+        self.n_vectors = 1001
+        self.run_time = 30
+        self.start_drawn = True
+        self.file_name = "circle.svg"
+        self.height = 5
+
+    def get_shape(self):
+        shape = SVGMobject(self.file_name)
+        return shape
+
+    def get_path(self):
+        shape = self.get_shape()
+        path = shape.family_members_with_points()[0]
+        path.set_height(self.height)
+        path.set_fill(opacity=0)
+        path.set_stroke(WHITE, 0)
+        return path
+
+class GuyScene(FourierSceneAbstract):
+    def __init__(self):
+        super().__init__()
+
+    def get_tex_symbol(self, symbol, color=None):
+        symbol = Tex(symbol, **self.fourier_symbol_config)
+
+        if (color is not None):
+            symbol.set_color(color)
+
+        return symbol
+
+    def get_path_from_symbol(self, symbol):
+        return symbol.family_members_with_points()[0]
 
     def construct(self):
-        self.add_vectors_circles_path()
-        self.add_top_row(self.vectors, self.circles)
-        self.write_title()
-        self.highlight_vectors_one_by_one()
-        self.change_shape()
+        # Symbols to draw
+        symbol1 = self.get_tex_symbol("g", RED)
+        symbol2 = self.get_tex_symbol("u", BLUE)
+        symbol3 = self.get_tex_symbol("y", GREEN)
+        group = VGroup(symbol1, symbol2, symbol3).arrange(RIGHT)
 
-    def write_title(self):
-        title = Text("Complex\\\\Fourier series")
-        title.scale(1.5)
-        title.to_edge(LEFT)
-        title.match_y(self.path)
+        # Fourier series for symbol1
+        vectors1 = self.get_fourier_vectors(self.get_path_from_symbol(symbol1))
+        circles1 = self.get_circles(vectors1)
+        drawn_path1 = self.get_drawn_path(vectors1).set_color(RED)
 
-        self.wait(11)
-        self.play(FadeIn(title, direction=DOWN))
-        self.wait(2)
-        self.title = title
+        # Fourier series for symbol2
+        vectors2 = self.get_fourier_vectors(self.get_path_from_symbol(symbol2))
+        circles2 = self.get_circles(vectors2)
+        drawn_path2 = self.get_drawn_path(vectors2).set_color(BLUE)
 
-    def highlight_vectors_one_by_one(self):
-        # Don't know why these vectors can't get copied.
-        # That seems like a problem that will come up again.
-        labels = self.top_row[-1]
-        next_anims = []
-        for vector, circle, label in zip(self.vectors, self.circles, labels):
-            # v_color = vector.get_color()
-            c_color = circle.get_color()
-            c_stroke_width = circle.get_stroke_width()
+        # Fourier series for symbol3
+        vectors3 = self.get_fourier_vectors(self.get_path_from_symbol(symbol3))
+        circles3 = self.get_circles(vectors3)
+        drawn_path3 = self.get_drawn_path(vectors3).set_color(GREEN)
 
-            rect = SurroundingRectangle(label, color=PINK)
-            self.play(
-                # vector.set_color, PINK,
-                circle.set_stroke, RED, 3,
-                FadeIn(rect),
-                *next_anims
-            )
-            self.wait()
-            next_anims = [
-                # vector.set_color, v_color,
-                circle.set_stroke, c_color, c_stroke_width,
-                FadeOut(rect),
-            ]
-        self.play(*next_anims)
+        # Camera updater
+        last_vector = vectors1[-1]
 
-    def change_shape(self):
-        # path_mob = OldTex("\\pi")
-        path_mob = SVGMobject("c_clef")
-        new_path = path_mob.family_members_with_points()[0]
-        new_path.set_height(4)
-        new_path.move_to(self.path, DOWN)
-        new_path.shift(0.5 * UP)
+        def follow_end_vector(camera):
+            camera.move_to(last_vector.get_end())
 
-        self.transition_to_alt_path(new_path)
-        for n in range(self.n_cycles):
-            self.run_one_cycle()
-
-    def transition_to_alt_path(self, new_path, morph_path=False):
-        new_coefs = self.get_coefficients_of_path(new_path)
-        new_vectors = self.get_rotating_vectors(
-            coefficients=new_coefs
+        # Scene start
+        self.wait(1)
+        self.play(
+            *[
+                GrowArrow(arrow)
+                for vector_group in [vectors1, vectors2, vectors3]
+                for arrow in vector_group
+            ],
+            run_time=3,
         )
-        new_drawn_path = self.get_drawn_path(new_vectors)
 
-        self.vector_clock.suspend_updating()
+        # Add objects to scene
+        self.add(
+            vectors1,
+            drawn_path1.set_stroke(width=0),
+            vectors2,
+            drawn_path2.set_stroke(width=0),
+            vectors3,
+            drawn_path3.set_stroke(width=0),
+        )
+        # Add updaters and start vector clock
+        self.camera.frame.add_updater(follow_end_vector)
+        vectors1.add_updater(self.update_vectors)
+        circles1.add_updater(self.update_circles)
+        vectors2.add_updater(self.update_vectors)
+        circles2.add_updater(self.update_circles)
+        vectors3.add_updater(self.update_vectors)
+        circles3.add_updater(self.update_circles)
+        drawn_path1.add_updater(self.update_path)
+        drawn_path2.add_updater(self.update_path)
+        drawn_path3.add_updater(self.update_path)
+        self.start_vector_clock()
 
-        vectors = self.vectors
-        anims = []
+        self.play(self.slow_factor_tracker.animate.set_value(1), run_time=0.5 * self.cycle_seconds)
+        self.wait(1 * self.cycle_seconds)
 
-        for vect, new_vect in zip(vectors, new_vectors):
-            new_vect.update()
-            new_vect.clear_updaters()
 
-            line = Line(stroke_width=0)
-            line.put_start_and_end_on(*vect.get_start_and_end())
-            anims.append(ApplyMethod(
-                line.put_start_and_end_on,
-                *new_vect.get_start_and_end()
-            ))
-            vect.freq = new_vect.freq
-            vect.coefficient = new_vect.coefficient
+class DrawTwoSVG(FourierOfPiSymbol):
+    def __init__(self):
+        super().__init__()
+        self.n_vectors = 101
+        self.run_time = 30
+        self.start_drawn = True
+        self.file_name_1 = "left"
+        self.file_name_2 = "right"
+        self.height = 5
 
-            vect.line = line
-            vect.add_updater(
-                lambda v: v.put_start_and_end_on(
-                    *v.line.get_start_and_end()
-                )
-            )
-        if morph_path:
-            anims.append(
-                ReplacementTransform(
-                    self.drawn_path,
-                    new_drawn_path
-                )
-            )
-        else:
-            anims.append(
-                FadeOut(self.drawn_path)
-            )
 
-        self.play(*anims, run_time=3)
-        for vect in self.vectors:
-            vect.remove_updater(vect.updaters[-1])
+    def get_shape(self, file_name):
+        shape = SVGMobject(file_name)
+        return shape
 
-        if not morph_path:
-            self.add(new_drawn_path)
-            self.vector_clock.set_value(0)
+    def get_path_from_shape(self, shape):
+        path = shape.family_members_with_points()[0]
+        path.set_fill(opacity=0)
+        path.set_stroke(WHITE, 1)
+        path.set_height(self.height)
+        return path
 
-        self.vector_clock.resume_updating()
-        self.drawn_path = new_drawn_path
+    def construct(self):
+        # Symbols to draw
+        shape1 = self.get_shape(self.file_name_1)
+        path1 = self.get_path_from_shape(shape1)
 
-    #
+        shape2 = self.get_shape(self.file_name_2)
+        path2 = self.get_path_from_shape(shape2)
+
+        # Fourier series for shape1
+        vectors1 = self.get_fourier_vectors(path1)
+        circles1 = self.get_circles(vectors1)
+        drawn_path1 = self.get_drawn_path(vectors1).set_color(RED)
+
+        # Fourier series for shape2
+        vectors2 = self.get_fourier_vectors(path2)
+        circles2 = self.get_circles(vectors2)
+        drawn_path2 = self.get_drawn_path(vectors2).set_color(BLUE)
+        # Camera updater
+        last_vector = vectors1[-1]
+
+        def follow_end_vector(camera):
+            camera.move_to(last_vector.get_end())
+
+        # Scene start
+        self.wait(1)
+        self.play(
+            *[
+                GrowArrow(arrow)
+                for vector_group in [vectors1, vectors2]
+                for arrow in vector_group
+            ],
+            run_time=3,
+        )
+
+        # Add objects to scene
+        self.add(
+            vectors1,
+            drawn_path1.set_stroke(width=0),
+            vectors2,
+            drawn_path2.set_stroke(width=0),
+        )
+        # Add updaters and start vector clock
+        self.camera.frame.add_updater(follow_end_vector)
+        vectors1.add_updater(self.update_vectors)
+        circles1.add_updater(self.update_circles)
+        vectors2.add_updater(self.update_vectors)
+        circles2.add_updater(self.update_circles)
+        drawn_path1.add_updater(self.update_path)
+        drawn_path2.add_updater(self.update_path)
+        self.start_vector_clock()
+
+        self.play(self.slow_factor_tracker.animate.set_value(1), run_time=0.5 * self.cycle_seconds)
+        self.wait(1 * self.cycle_seconds)
+
+class DrawTwo(FourierOfPiSymbol):
+    def __init__(self):
+        super().__init__()
+        self.n_vectors = 101
+        self.run_time = 30
+        self.start_drawn = True
+        self.height = 250
+
+    def get_shape1(self):
+        # Define the shape for the first path
+        step_points = [
+            (718, 319, 0),
+            (708, 279, 0),
+            (688, 244, 0),
+            (657, 224, 0),
+            (622, 215, 0),
+            (568, 216, 0),
+            (498, 229, 0),
+            (444, 274, 0),
+            (442, 321, 0),
+            (452, 373, 0),
+            (478, 433, 0),
+            (504, 474, 0),
+            (544, 519, 0),
+            (591, 562, 0),
+            (635, 603, 0),
+            (670, 644, 0),
+            (709, 688, 0),
+        ]
+        shape = VMobject()
+        inverted_points = [[x, - y, z] for x, y, z in step_points]
+        shape.set_points_as_corners([*inverted_points, inverted_points[0]])  # Close the loop
+        return shape
+
+    def get_shape2(self):
+        # Define the shape for the second path
+        step_points = [
+            (724, 308, 0),
+            (751, 267, 0),
+            (787, 234, 0),
+            (827, 220, 0),
+            (867, 214, 0),
+            (917, 227, 0),
+            (945, 246, 0),
+            (965, 271, 0),
+            (980, 305, 0),
+            (978, 354, 0),
+            (963, 395, 0),
+            (936, 436, 0),
+            (906, 467, 0),
+            (871, 492, 0),
+            (840, 531, 0),
+            (810, 562, 0),
+            (769, 616, 0),
+            (751, 647, 0),
+            (731, 688, 0),
+        ]
+        shape = VMobject()
+        inverted_points = [[x, -y, z] for x, y, z in step_points]
+        shape.set_points_as_corners([*inverted_points, inverted_points[0]])  # Close the loop
+        return shape
+
+    def get_path1(self):
+        shape1 = self.get_shape1()
+        path = shape1.family_members_with_points()[0]
+        # path.set_height(self.height)
+        path.set_fill(opacity=0)
+        path.set_stroke(WHITE, 0)
+        return path
+
+    def get_path2(self):
+        shape = self.get_shape2()
+        path = shape.family_members_with_points()[0]
+        # path.set_height(self.height)
+        path.set_fill(opacity=0)
+        path.set_stroke(WHITE, 0)
+        return path
+
+    def construct(self):
+        # Adjust the camera frame
+        self.camera.frame.set_width(self.get_path1().width)
+        self.camera.frame.set_height(self.get_path1().height)
+        path1 = self.get_path1()
+        path2 = self.get_path2()
+        path_center = path1.get_center()
+        self.camera.frame.move_to(path_center)  # Center the frame around the shape's coordinates
+
+        vectors1 = self.get_fourier_vectors(path1)
+        circles1 = self.get_circles(vectors1)
+        drawn_path1 = self.get_drawn_path(vectors1).set_color(YELLOW)
+
+        vectors2 = self.get_fourier_vectors(path2)
+        circles2 = self.get_circles(vectors2)
+        drawn_path2 = self.get_drawn_path(vectors2).set_color(RED)
+
+        last_vector = vectors1[-1]
+
+        def follow_end_vector(camera):
+            camera.move_to(last_vector.get_end())
+
+        self.wait(1)
+        self.play(
+            *[
+                GrowArrow(arrow)
+                for vector_group in [vectors1[1:], vectors2[1:]]  # Exclude the first vector
+                for arrow in vector_group
+            ],
+            *[
+                Create(circle)
+                for circle_group in [circles1[1:], circles2[1:]]  # Exclude the first circle
+                for circle in circle_group
+            ],
+            run_time=3,
+        )
+
+        self.add(
+            vectors1,
+            circles1,
+            vectors2,
+            circles2,
+            vectors1[0].set_stroke(width=0),  # Add vectors excluding the first
+            circles1[0].set_stroke(width=0),  # Add circles excluding the first
+            vectors2[0].set_stroke(width=0),  # Add vectors excluding the first
+            circles2[0].set_stroke(width=0),  # Add circles excluding the first
+            drawn_path1.set_stroke(width=0),
+            drawn_path2.set_stroke(width=0)
+        )
+
+        self.camera.frame.add_updater(follow_end_vector)
+        vectors1.add_updater(self.update_vectors)
+        circles1.add_updater(self.update_circles)
+        drawn_path1.add_updater(self.update_path)
+        vectors2.add_updater(self.update_vectors)
+        circles2.add_updater(self.update_circles)
+        drawn_path2.add_updater(self.update_path)
+        self.start_vector_clock()
+        self.play(self.slow_factor_tracker.animate.set_value(1), run_time=1 * self.cycle_seconds)
+        self.wait(1 * self.cycle_seconds)
+
+class DrawPhoi(FourierOfPiSymbol):
+    def __init__(self):
+        super().__init__()
+        self.n_vectors = 101
+        self.run_time = 30
+        self.start_drawn = True
+
+    def get_shape(self):
+        # Define the shape for the step function
+
+        shape = VMobject()
+        inverted_points = [[x, -y, z] for x, y, z in phoi_points]
+        shape.set_points_as_corners([*inverted_points, inverted_points[0]])  # Close the loop
+        return shape
+
     def get_path(self):
-        path = super().get_path()
-        path.set_height(self.drawing_height)
-        path.to_edge(DOWN)
+        shape = self.get_shape()
+        path = shape.family_members_with_points()[0]
+        path.set_fill(opacity=0)
+        path.set_stroke(WHITE, 0)
         return path
 
-    def add_top_row(self, vectors, circles, max_freq=3):
-        self.top_row = self.get_top_row(
-            vectors, circles, max_freq
+    def construct(self):
+        # Adjust the camera frame
+        self.camera.frame.set_width(self.get_path().width)
+        self.camera.frame.set_height(self.get_path().height)
+        path = self.get_path()
+        path_center = path.get_center()
+        self.camera.frame.move_to(path_center)  # Center the frame around the shape's coordinates
+        vectors = self.get_fourier_vectors(path)
+        circles = self.get_circles(vectors)
+        drawn_path = self.get_drawn_path(vectors).set_color(YELLOW)
+        last_vector = vectors[-1]
+
+        def follow_end_vector(camera):
+            camera.move_to(last_vector.get_end())
+
+        self.wait(1)
+        self.play(
+            *[
+                GrowArrow(arrow)
+                for arrow in vectors[1:]  # Exclude the first vector
+            ],
+            *[
+                Create(circle)
+                for circle in circles[1:]  # Exclude the first circle
+            ],
+            run_time=3,
         )
-        self.add(self.top_row)
-
-    def get_top_row(self, vectors, circles, max_freq=3):
-        vector_copies = VGroup()
-        circle_copies = VGroup()
-        for vector, circle in zip(vectors, circles):
-            if vector.freq > max_freq:
-                break
-            vcopy = vector.copy()
-            vcopy.clear_updaters()
-            ccopy = circle.copy()
-            ccopy.clear_updaters()
-            ccopy.original = circle
-            vcopy.original = vector
-
-            vcopy.center_point = op.add(
-                self.top_row_center,
-                vector.freq * self.top_row_x_spacing * RIGHT,
-            )
-            ccopy.center_point = vcopy.center_point
-            vcopy.add_updater(self.update_top_row_vector_copy)
-            ccopy.add_updater(self.update_top_row_circle_copy)
-            vector_copies.add(vcopy)
-            circle_copies.add(ccopy)
-
-        dots = VGroup(*[
-            Tex("\\dots").next_to(
-                circle_copies, direction,
-                MED_LARGE_BUFF,
-            )
-            for direction in [LEFT, RIGHT]
-        ])
-        labels = self.get_top_row_labels(vector_copies)
-        return VGroup(
-            vector_copies,
-            circle_copies,
-            dots,
-            labels,
+        self.add(
+            vectors,
+            circles,
+            vectors[0].set_stroke(width=0),  # Add vectors excluding the first
+            circles[0].set_stroke(width=0),  # Add circles excluding the first
+            drawn_path.set_stroke(width=0)
         )
+        self.camera.frame.add_updater(follow_end_vector)
+        vectors.add_updater(self.update_vectors)
+        circles.add_updater(self.update_circles)
+        drawn_path.add_updater(self.update_path)
+        self.start_vector_clock()
+        self.play(self.slow_factor_tracker.animate.set_value(1), run_time=1 * self.cycle_seconds)
+        self.wait(1 * self.cycle_seconds)
 
-    def update_top_row_vector_copy(self, vcopy):
-        vcopy.become(vcopy.original)
-        vcopy.scale(self.top_row_copy_scale_factor)
-        vcopy.shift(vcopy.center_point - vcopy.get_start())
-        return vcopy
 
-    def update_top_row_circle_copy(self, ccopy):
-        ccopy.become(ccopy.original)
-        ccopy.scale(self.top_row_copy_scale_factor)
-        ccopy.move_to(ccopy.center_point)
-        return ccopy
+class DrawMatNgocXit(FourierOfPiSymbol):
+    def __init__(self):
+        super().__init__()
+        self.n_vectors = 101
+        self.run_time = 30
+        self.start_drawn = True
 
-    def get_top_row_labels(self, vector_copies):
-        labels = VGroup()
-        for vector_copy in vector_copies:
-            freq = vector_copy.freq
-            label = Integer(freq)
-            label.move_to(np.array([
-                freq * self.top_row_x_spacing,
-                self.top_row_label_y,
-                0
-            ]))
-            labels.add(label)
-        return labels
+    def get_shape(self):
+        # Define the shape for the step function
+        shape = VMobject()
+        inverted_points = [[x, -y, z] for x, y, z in mat_ngoc_points]
+        shape.set_points_as_corners([*inverted_points, inverted_points[0]])  # Close the loop
+        return shape
 
-    def setup_plane(self):
-        plane = ComplexPlane(**self.plane_config)
-        plane.shift(self.center_point)
-        plane.add_coordinates()
-
-        top_rect = Rectangle(
-            width=FRAME_WIDTH,
-            fill_color=BLACK,
-            fill_opacity=1,
-            stroke_width=0,
-            height=self.top_rect_height,
-        )
-        top_rect.to_edge(UP, buff=0)
-
-        self.plane = plane
-        self.add(plane)
-        self.add(top_rect)
-
-    def get_path_end(self, vectors, stroke_width=None, **kwargs):
-        if stroke_width is None:
-            stroke_width = self.max_circle_stroke_width
-        full_path = self.get_vector_sum_path(vectors, **kwargs)
-        path = VMobject()
-        path.set_stroke(
-            self.drawn_path_color,
-            stroke_width
-        )
-
-        def update_path(p):
-            alpha = self.get_vector_time() % 1
-            p.pointwise_become_partial(
-                full_path,
-                np.clip(alpha - 0.01, 0, 1),
-                np.clip(alpha, 0, 1),
-            )
-            p.get_points()[-1] = vectors[-1].get_end()
-
-        path.add_updater(update_path)
+    def get_path(self):
+        shape = self.get_shape()
+        path = shape.family_members_with_points()[0]
+        path.set_fill(opacity=0)
+        path.set_stroke(WHITE, 0)
         return path
 
-    def get_drawn_path_alpha(self):
-        return super().get_drawn_path_alpha() - 0.002
+    def construct(self):
+        # Adjust the camera frame
+        self.camera.frame.set_width(self.get_path().width)
+        self.camera.frame.set_height(self.get_path().height)
+        path = self.get_path()
+        path_center = path.get_center()
+        self.camera.frame.move_to(path_center)  # Center the frame around the shape's coordinates
+        vectors = self.get_fourier_vectors(path)
+        circles = self.get_circles(vectors)
+        drawn_path = self.get_drawn_path(vectors).set_color(YELLOW)
+        last_vector = vectors[-1]
 
-    def get_drawn_path(self, vectors, stroke_width=2, **kwargs):
-        odp = super().get_drawn_path(vectors, stroke_width, **kwargs)
-        return VGroup(
-            odp,
-            self.get_path_end(vectors, stroke_width, **kwargs),
+        def follow_end_vector(camera):
+            camera.move_to(last_vector.get_end())
+
+        self.wait(1)
+        self.play(
+            *[
+                GrowArrow(arrow)
+                for arrow in vectors[1:]  # Exclude the first vector
+            ],
+            *[
+                Create(circle)
+                for circle in circles[1:]  # Exclude the first circle
+            ],
+            run_time=3,
         )
+        self.add(
+            vectors,
+            circles,
+            vectors[0].set_stroke(width=0),  # Add vectors excluding the first
+            circles[0].set_stroke(width=0),  # Add circles excluding the first
+            drawn_path.set_stroke(width=0)
+        )
+        self.camera.frame.add_updater(follow_end_vector)
+        vectors.add_updater(self.update_vectors)
+        circles.add_updater(self.update_circles)
+        drawn_path.add_updater(self.update_path)
+        self.start_vector_clock()
+        self.play(self.slow_factor_tracker.animate.set_value(1), run_time=1 * self.cycle_seconds)
+        self.wait(1 * self.cycle_seconds)
 
-    def get_vertically_falling_tracing(self, vector, color, stroke_width=3, rate=0.25):
-        path = VMobject()
-        path.set_stroke(color, stroke_width)
-        path.start_new_path(vector.get_end())
-        path.vector = vector
+class DrawLan1(FourierOfPiSymbol):
+    def __init__(self):
+        super().__init__()
+        self.n_vectors = 101
+        self.run_time = 30
+        self.start_drawn = True
 
-        def update_path(p, dt):
-            p.shift(rate * dt * DOWN)
-            p.add_smooth_curve_to(p.vector.get_end())
-        path.add_updater(update_path)
+    def get_shape(self):
+        # Define the shape for the step function
+        shape = VMobject()
+        inverted_points = [[x, -y, z] for x, y, z in lan1_points]
+        shape.set_points_as_corners([*inverted_points, inverted_points[0]])  # Close the loop
+        return shape
+
+    def get_path(self):
+        shape = self.get_shape()
+        path = shape.family_members_with_points()[0]
+        path.set_fill(opacity=0)
+        path.set_stroke(WHITE, 0)
         return path
+
+    def construct(self):
+        # Adjust the camera frame
+        self.camera.frame.set_width(self.get_path().width)
+        self.camera.frame.set_height(self.get_path().height)
+        path = self.get_path()
+        path_center = path.get_center()
+        self.camera.frame.move_to(path_center)  # Center the frame around the shape's coordinates
+        vectors = self.get_fourier_vectors(path)
+        circles = self.get_circles(vectors)
+        drawn_path = self.get_drawn_path(vectors).set_color(YELLOW)
+        last_vector = vectors[-1]
+
+        def follow_end_vector(camera):
+            camera.move_to(last_vector.get_end())
+
+        self.wait(1)
+        self.play(
+            *[
+                GrowArrow(arrow)
+                for arrow in vectors[1:]  # Exclude the first vector
+            ],
+            *[
+                Create(circle)
+                for circle in circles[1:]  # Exclude the first circle
+            ],
+            run_time=3,
+        )
+        self.add(
+            vectors,
+            circles,
+            vectors[0].set_stroke(width=0),  # Add vectors excluding the first
+            circles[0].set_stroke(width=0),  # Add circles excluding the first
+            drawn_path.set_stroke(width=0)
+        )
+        self.camera.frame.add_updater(follow_end_vector)
+        vectors.add_updater(self.update_vectors)
+        circles.add_updater(self.update_circles)
+        drawn_path.add_updater(self.update_path)
+        self.start_vector_clock()
+        self.play(self.slow_factor_tracker.animate.set_value(1), run_time= 4 * self.cycle_seconds)
+        self.wait(1 * self.cycle_seconds)
+
+class DrawLan2(FourierOfPiSymbol):
+    def __init__(self):
+        super().__init__()
+        self.n_vectors = 101
+        self.run_time = 30
+        self.start_drawn = True
+
+    def get_shape(self):
+        shape = VMobject()
+        inverted_points = [[x, -y, z] for x, y, z in lan2_points]
+        shape.set_points_as_corners([*inverted_points, inverted_points[0]])  # Close the loop
+        return shape
+
+    def get_path(self):
+        shape = self.get_shape()
+        path = shape.family_members_with_points()[0]
+        path.set_fill(opacity=0)
+        path.set_stroke(WHITE, 0)
+        return path
+
+    def construct(self):
+        # Adjust the camera frame
+        self.camera.frame.set_width(self.get_path().width)
+        self.camera.frame.set_height(self.get_path().height)
+        path = self.get_path()
+        path_center = path.get_center()
+        self.camera.frame.move_to(path_center)  # Center the frame around the shape's coordinates
+        vectors = self.get_fourier_vectors(path)
+        circles = self.get_circles(vectors)
+        drawn_path = self.get_drawn_path(vectors).set_color(YELLOW)
+        last_vector = vectors[-1]
+
+        def follow_end_vector(camera):
+            camera.move_to(last_vector.get_end())
+
+        self.wait(1)
+        self.play(
+            *[
+                GrowArrow(arrow)
+                for arrow in vectors[1:]  # Exclude the first vector
+            ],
+            *[
+                Create(circle)
+                for circle in circles[1:]  # Exclude the first circle
+            ],
+            run_time=3,
+        )
+        self.add(
+            vectors,
+            circles,
+            vectors[0].set_stroke(width=0),  # Add vectors excluding the first
+            circles[0].set_stroke(width=0),  # Add circles excluding the first
+            drawn_path.set_stroke(width=0)
+        )
+        self.camera.frame.add_updater(follow_end_vector)
+        vectors.add_updater(self.update_vectors)
+        circles.add_updater(self.update_circles)
+        drawn_path.add_updater(self.update_path)
+        self.start_vector_clock()
+        self.play(self.slow_factor_tracker.animate.set_value(1), run_time= 4 * self.cycle_seconds)
+        self.wait(1 * self.cycle_seconds)
+
+class DrawLan3(FourierOfPiSymbol):
+    def __init__(self):
+        super().__init__()
+        self.n_vectors = 101
+        self.run_time = 30
+        self.start_drawn = True
+
+    def get_shape(self):
+        # Define the shape for the step function
+        shape = VMobject()
+        inverted_points = [[x, -y, z] for x, y, z in lan3_points]
+        shape.set_points_as_corners([*inverted_points, inverted_points[0]])  # Close the loop
+        return shape
+
+    def get_path(self):
+        shape = self.get_shape()
+        path = shape.family_members_with_points()[0]
+        path.set_fill(opacity=0)
+        path.set_stroke(WHITE, 0)
+        return path
+
+    def construct(self):
+        # Adjust the camera frame
+        self.camera.frame.set_width(self.get_path().width)
+        self.camera.frame.set_height(self.get_path().height)
+        path = self.get_path()
+        path_center = path.get_center()
+        self.camera.frame.move_to(path_center)  # Center the frame around the shape's coordinates
+        vectors = self.get_fourier_vectors(path)
+        circles = self.get_circles(vectors)
+        drawn_path = self.get_drawn_path(vectors).set_color(YELLOW)
+        last_vector = vectors[-1]
+
+        def follow_end_vector(camera):
+            camera.move_to(last_vector.get_end())
+
+        self.wait(1)
+        self.play(
+            *[
+                GrowArrow(arrow)
+                for arrow in vectors[1:]  # Exclude the first vector
+            ],
+            *[
+                Create(circle)
+                for circle in circles[1:]  # Exclude the first circle
+            ],
+            run_time=3,
+        )
+        self.add(
+            vectors,
+            circles,
+            vectors[0].set_stroke(width=0),  # Add vectors excluding the first
+            circles[0].set_stroke(width=0),  # Add circles excluding the first
+            drawn_path.set_stroke(width=0)
+        )
+        self.camera.frame.add_updater(follow_end_vector)
+        vectors.add_updater(self.update_vectors)
+        circles.add_updater(self.update_circles)
+        drawn_path.add_updater(self.update_path)
+        self.start_vector_clock()
+        self.play(self.slow_factor_tracker.animate.set_value(1), run_time= 4 * self.cycle_seconds)
+        self.wait(1 * self.cycle_seconds)
+
+class DrawLan4(FourierOfPiSymbol):
+    def __init__(self):
+        super().__init__()
+        self.n_vectors = 101
+        self.run_time = 30
+        self.start_drawn = True
+
+    def get_shape(self):
+        shape = VMobject()
+        inverted_points = [[x, -y, z] for x, y, z in lan4_points]
+        shape.set_points_as_corners([*inverted_points, inverted_points[0]])  # Close the loop
+        return shape
+
+    def get_path(self):
+        shape = self.get_shape()
+        path = shape.family_members_with_points()[0]
+        path.set_fill(opacity=0)
+        path.set_stroke(WHITE, 0)
+        return path
+
+    def construct(self):
+        # Adjust the camera frame
+        self.camera.frame.set_width(self.get_path().width)
+        self.camera.frame.set_height(self.get_path().height)
+        path = self.get_path()
+        path_center = path.get_center()
+        self.camera.frame.move_to(path_center)  # Center the frame around the shape's coordinates
+        vectors = self.get_fourier_vectors(path)
+        circles = self.get_circles(vectors)
+        drawn_path = self.get_drawn_path(vectors).set_color(YELLOW)
+        last_vector = vectors[-1]
+
+        def follow_end_vector(camera):
+            camera.move_to(last_vector.get_end())
+
+        self.wait(1)
+        self.play(
+            *[
+                GrowArrow(arrow)
+                for arrow in vectors[1:]  # Exclude the first vector
+            ],
+            *[
+                Create(circle)
+                for circle in circles[1:]  # Exclude the first circle
+            ],
+            run_time=3,
+        )
+        self.add(
+            vectors,
+            circles,
+            vectors[0].set_stroke(width=0),  # Add vectors excluding the first
+            circles[0].set_stroke(width=0),  # Add circles excluding the first
+            drawn_path.set_stroke(width=0)
+        )
+        self.camera.frame.add_updater(follow_end_vector)
+        vectors.add_updater(self.update_vectors)
+        circles.add_updater(self.update_circles)
+        drawn_path.add_updater(self.update_path)
+        self.start_vector_clock()
+        self.play(self.slow_factor_tracker.animate.set_value(1), run_time= 4 * self.cycle_seconds)
+        self.wait(1 * self.cycle_seconds)
+
+class DrawLan5(FourierOfPiSymbol):
+    def __init__(self):
+        super().__init__()
+        self.n_vectors = 101
+        self.run_time = 30
+        self.start_drawn = True
+
+    def get_shape(self):
+        shape = VMobject()
+        inverted_points = [[x, -y, z] for x, y, z in lan5_points]
+        shape.set_points_as_corners([*inverted_points, inverted_points[0]])  # Close the loop
+        return shape
+
+    def get_path(self):
+        shape = self.get_shape()
+        path = shape.family_members_with_points()[0]
+        path.set_fill(opacity=0)
+        path.set_stroke(WHITE, 0)
+        return path
+
+    def construct(self):
+        # Adjust the camera frame
+        self.camera.frame.set_width(self.get_path().width)
+        self.camera.frame.set_height(self.get_path().height)
+        path = self.get_path()
+        path_center = path.get_center()
+        self.camera.frame.move_to(path_center)  # Center the frame around the shape's coordinates
+        vectors = self.get_fourier_vectors(path)
+        circles = self.get_circles(vectors)
+        drawn_path = self.get_drawn_path(vectors).set_color(YELLOW)
+        last_vector = vectors[-1]
+
+        def follow_end_vector(camera):
+            camera.move_to(last_vector.get_end())
+
+        self.wait(1)
+        self.play(
+            *[
+                GrowArrow(arrow)
+                for arrow in vectors[1:]  # Exclude the first vector
+            ],
+            *[
+                Create(circle)
+                for circle in circles[1:]  # Exclude the first circle
+            ],
+            run_time=3,
+        )
+        self.add(
+            vectors,
+            circles,
+            vectors[0].set_stroke(width=0),  # Add vectors excluding the first
+            circles[0].set_stroke(width=0),  # Add circles excluding the first
+            drawn_path.set_stroke(width=0)
+        )
+        self.camera.frame.add_updater(follow_end_vector)
+        vectors.add_updater(self.update_vectors)
+        circles.add_updater(self.update_circles)
+        drawn_path.add_updater(self.update_path)
+        self.start_vector_clock()
+        self.play(self.slow_factor_tracker.animate.set_value(1), run_time= 4 * self.cycle_seconds)
+        self.wait(1 * self.cycle_seconds)
